@@ -6,6 +6,7 @@ use cairo_air::{CairoProof, PreProcessedTraceVariant};
 use cairo_lang_runner::Arg;
 use cairo_prove::args::{Cli, Commands, ProgramArguments};
 use cairo_prove::execute::execute;
+use cairo_prove::execute_and_prove;
 use cairo_prove::prove::{prove, prover_input_from_runner};
 use clap::Parser;
 use log::{error, info};
@@ -14,21 +15,6 @@ use stwo_cairo_prover::stwo_prover::core::pcs::PcsConfig;
 use stwo_cairo_prover::stwo_prover::core::vcs::blake2_merkle::{
     Blake2sMerkleChannel, Blake2sMerkleHasher,
 };
-
-pub fn execute_and_prove(
-    target_path: &str,
-    args: Vec<Arg>,
-    pcs_config: PcsConfig,
-) -> CairoProof<Blake2sMerkleHasher> {
-    // Execute.
-    let executable = serde_json::from_reader(std::fs::File::open(target_path).unwrap())
-        .expect("Failed to read executable");
-    let runner = execute(executable, args);
-    
-    // Prove.
-    let prover_input = prover_input_from_runner(&runner);
-    prove(prover_input, pcs_config)
-}
 
 fn secure_pcs_config() -> PcsConfig {
     PcsConfig {
