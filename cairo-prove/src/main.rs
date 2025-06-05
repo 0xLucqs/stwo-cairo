@@ -15,7 +15,7 @@ use stwo_cairo_prover::stwo_prover::core::vcs::blake2_merkle::{
     Blake2sMerkleChannel, Blake2sMerkleHasher,
 };
 
-fn execute_and_prove(
+pub fn execute_and_prove(
     target_path: &str,
     args: Vec<Arg>,
     pcs_config: PcsConfig,
