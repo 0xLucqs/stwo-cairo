@@ -33,10 +33,14 @@ use super::range_checks_air::{
     RangeChecksInteractionElements,
 };
 use crate::components::{
-    memory_address_to_id, memory_id_to_big, verify_bitwise_xor_4, verify_bitwise_xor_7,
-    verify_bitwise_xor_8, verify_bitwise_xor_9, verify_instruction,
+    memory_address_to_id, memory_id_to_big, verify_bitwise_and_8, verify_bitwise_not_16,
+    verify_bitwise_xor_4, verify_bitwise_xor_7, verify_bitwise_xor_8, verify_bitwise_xor_9,
+    verify_instruction,
 };
 use crate::relations;
+use crate::sha256::air::{
+    Sha256ContextClaim, Sha256ContextComponents, Sha256ContextInteractionClaim,
+};
 use crate::verifier::RelationUse;
 
 #[derive(Serialize, Deserialize)]
@@ -109,6 +113,7 @@ pub struct CairoClaim {
     pub builtins: BuiltinsClaim,
     pub pedersen_context: PedersenContextClaim,
     pub poseidon_context: PoseidonContextClaim,
+    pub sha256_context: Sha256ContextClaim,
     pub memory_address_to_id: memory_address_to_id::Claim,
     pub memory_id_to_value: memory_id_to_big::Claim,
     pub range_checks: RangeChecksClaim,
@@ -116,6 +121,8 @@ pub struct CairoClaim {
     pub verify_bitwise_xor_7: verify_bitwise_xor_7::Claim,
     pub verify_bitwise_xor_8: verify_bitwise_xor_8::Claim,
     pub verify_bitwise_xor_9: verify_bitwise_xor_9::Claim,
+    pub verify_bitwise_not_16: verify_bitwise_not_16::Claim,
+    pub verify_bitwise_and_8: verify_bitwise_and_8::Claim,
     // ...
 }
 
@@ -129,6 +136,7 @@ impl CairoClaim {
             builtins,
             pedersen_context,
             poseidon_context,
+            sha256_context,
             memory_address_to_id,
             memory_id_to_value,
             range_checks,
@@ -136,6 +144,8 @@ impl CairoClaim {
             verify_bitwise_xor_7,
             verify_bitwise_xor_8,
             verify_bitwise_xor_9,
+            verify_bitwise_not_16,
+            verify_bitwise_and_8,
         } = self;
         public_data.mix_into(channel);
         opcodes.mix_into(channel);
@@ -144,6 +154,7 @@ impl CairoClaim {
         builtins.mix_into(channel);
         pedersen_context.mix_into(channel);
         poseidon_context.mix_into(channel);
+        sha256_context.mix_into(channel);
         memory_address_to_id.mix_into(channel);
         memory_id_to_value.mix_into(channel);
         range_checks.mix_into(channel);
@@ -151,6 +162,8 @@ impl CairoClaim {
         verify_bitwise_xor_7.mix_into(channel);
         verify_bitwise_xor_8.mix_into(channel);
         verify_bitwise_xor_9.mix_into(channel);
+        verify_bitwise_not_16.mix_into(channel);
+        verify_bitwise_and_8.mix_into(channel);
     }
 
     /// Returns the log sizes of the components.
@@ -163,6 +176,7 @@ impl CairoClaim {
             self.builtins.log_sizes(),
             self.pedersen_context.log_sizes(),
             self.poseidon_context.log_sizes(),
+            self.sha256_context.log_sizes(),
             self.memory_address_to_id.log_sizes(),
             self.memory_id_to_value.log_sizes(),
             self.range_checks.log_sizes(),
@@ -170,6 +184,8 @@ impl CairoClaim {
             self.verify_bitwise_xor_7.log_sizes(),
             self.verify_bitwise_xor_8.log_sizes(),
             self.verify_bitwise_xor_9.log_sizes(),
+            self.verify_bitwise_not_16.log_sizes(),
+            self.verify_bitwise_and_8.log_sizes(),
         ];
 
         TreeVec::concat_cols(log_sizes_list.into_iter())
@@ -184,6 +200,7 @@ impl CairoClaim {
             builtins,
             pedersen_context,
             poseidon_context,
+            sha256_context,
             memory_address_to_id: _,
             memory_id_to_value,
             range_checks: _,
@@ -191,6 +208,8 @@ impl CairoClaim {
             verify_bitwise_xor_7: _,
             verify_bitwise_xor_8: _,
             verify_bitwise_xor_9: _,
+            verify_bitwise_not_16: _,
+            verify_bitwise_and_8: _,
         } = self;
         // NOTE: The following components do not USE relations:
         // - range_checks
@@ -202,6 +221,7 @@ impl CairoClaim {
         blake_context.accumulate_relation_uses(relation_uses);
         pedersen_context.accumulate_relation_uses(relation_uses);
         poseidon_context.accumulate_relation_uses(relation_uses);
+        sha256_context.accumulate_relation_uses(relation_uses);
         accumulate_relation_uses(
             relation_uses,
             verify_instruction::RELATION_USES_PER_ROW,
@@ -334,6 +354,7 @@ pub struct PublicSegmentRanges {
     pub ec_op: Option<SegmentRange>,
     pub keccak: Option<SegmentRange>,
     pub poseidon: Option<SegmentRange>,
+    pub sha256: Option<SegmentRange>,
     pub range_check_96: Option<SegmentRange>,
     pub add_mod: Option<SegmentRange>,
     pub mul_mod: Option<SegmentRange>,
@@ -351,6 +372,7 @@ pub struct FullSegmentRanges {
     pub ec_op: SegmentRange,
     pub keccak: SegmentRange,
     pub poseidon: SegmentRange,
+    pub sha256: SegmentRange,
     pub range_check_96: SegmentRange,
     pub add_mod: SegmentRange,
     pub mul_mod: SegmentRange,
@@ -368,6 +390,7 @@ impl CairoSerialize for PublicSegmentRanges {
             ec_op,
             keccak,
             poseidon,
+            sha256,
             range_check_96,
             add_mod,
             mul_mod,
@@ -383,6 +406,7 @@ impl CairoSerialize for PublicSegmentRanges {
                 ec_op: ec_op.unwrap(),
                 keccak: keccak.unwrap(),
                 poseidon: poseidon.unwrap(),
+                sha256: sha256.unwrap(),
                 range_check_96: range_check_96.unwrap(),
                 add_mod: add_mod.unwrap(),
                 mul_mod: mul_mod.unwrap(),
@@ -403,6 +427,7 @@ impl CairoDeserialize for PublicSegmentRanges {
             ec_op,
             keccak,
             poseidon,
+            sha256,
             range_check_96,
             add_mod,
             mul_mod,
@@ -417,6 +442,7 @@ impl CairoDeserialize for PublicSegmentRanges {
             ec_op: Some(ec_op),
             keccak: Some(keccak),
             poseidon: Some(poseidon),
+            sha256: Some(sha256),
             range_check_96: Some(range_check_96),
             add_mod: Some(add_mod),
             mul_mod: Some(mul_mod),
@@ -472,6 +498,7 @@ impl PublicSegmentRanges {
             ec_op,
             keccak,
             poseidon,
+            sha256,
             range_check_96,
             add_mod,
             mul_mod,
@@ -485,6 +512,7 @@ impl PublicSegmentRanges {
             ec_op,
             keccak,
             poseidon,
+            sha256,
             range_check_96,
             add_mod,
             mul_mod,
@@ -583,6 +611,25 @@ pub struct CairoInteractionElements {
     pub verify_bitwise_xor_8: relations::VerifyBitwiseXor_8,
     pub verify_bitwise_xor_9: relations::VerifyBitwiseXor_9,
     pub verify_bitwise_xor_12: relations::VerifyBitwiseXor_12,
+    pub verify_bitwise_not_16: relations::VerifyBitwiseNot_16,
+    pub verify_bitwise_and_8: relations::VerifyBitwiseAnd_8,
+    pub sigma: relations::Sigma,
+    pub sha_256_schedule: relations::Sha256Schedule,
+    pub sha_256_k_table: relations::Sha256KTable,
+    pub sha_256_round: relations::Sha256Round,
+    pub sha_256_sigma_table: relations::Sha256SigmaTable,
+    pub sha_256_big_sigma_0_o_0: relations::Sha256BigSigma0O0,
+    pub sha_256_big_sigma_0_o_1: relations::Sha256BigSigma0O1,
+    pub sha_256_big_sigma_0: relations::Sha256BigSigma0,
+    pub sha_256_big_sigma_1_o_0: relations::Sha256BigSigma1O0,
+    pub sha_256_big_sigma_1_o_1: relations::Sha256BigSigma1O1,
+    pub sha_256_big_sigma_1: relations::Sha256BigSigma1,
+    pub sha_256_small_sigma_0_o_0: relations::Sha256SmallSigma0O0,
+    pub sha_256_small_sigma_0_o_1: relations::Sha256SmallSigma0O1,
+    pub sha_256_small_sigma_0: relations::Sha256SmallSigma0,
+    pub sha_256_small_sigma_1_o_0: relations::Sha256SmallSigma1O0,
+    pub sha_256_small_sigma_1_o_1: relations::Sha256SmallSigma1O1,
+    pub sha_256_small_sigma_1: relations::Sha256SmallSigma1,
 }
 impl CairoInteractionElements {
     pub fn draw(channel: &mut impl Channel) -> CairoInteractionElements {
@@ -608,6 +655,25 @@ impl CairoInteractionElements {
             verify_bitwise_xor_8: relations::VerifyBitwiseXor_8::draw(channel),
             verify_bitwise_xor_9: relations::VerifyBitwiseXor_9::draw(channel),
             verify_bitwise_xor_12: relations::VerifyBitwiseXor_12::draw(channel),
+            verify_bitwise_not_16: relations::VerifyBitwiseNot_16::draw(channel),
+            verify_bitwise_and_8: relations::VerifyBitwiseAnd_8::draw(channel),
+            sigma: relations::Sigma::draw(channel),
+            sha_256_schedule: relations::Sha256Schedule::draw(channel),
+            sha_256_k_table: relations::Sha256KTable::draw(channel),
+            sha_256_round: relations::Sha256Round::draw(channel),
+            sha_256_sigma_table: relations::Sha256SigmaTable::draw(channel),
+            sha_256_big_sigma_0_o_0: relations::Sha256BigSigma0O0::draw(channel),
+            sha_256_big_sigma_0_o_1: relations::Sha256BigSigma0O1::draw(channel),
+            sha_256_big_sigma_0: relations::Sha256BigSigma0::draw(channel),
+            sha_256_big_sigma_1_o_0: relations::Sha256BigSigma1O0::draw(channel),
+            sha_256_big_sigma_1_o_1: relations::Sha256BigSigma1O1::draw(channel),
+            sha_256_big_sigma_1: relations::Sha256BigSigma1::draw(channel),
+            sha_256_small_sigma_0_o_0: relations::Sha256SmallSigma0O0::draw(channel),
+            sha_256_small_sigma_0_o_1: relations::Sha256SmallSigma0O1::draw(channel),
+            sha_256_small_sigma_0: relations::Sha256SmallSigma0::draw(channel),
+            sha_256_small_sigma_1_o_0: relations::Sha256SmallSigma1O0::draw(channel),
+            sha_256_small_sigma_1_o_1: relations::Sha256SmallSigma1O1::draw(channel),
+            sha_256_small_sigma_1: relations::Sha256SmallSigma1::draw(channel),
         }
     }
 }
@@ -620,6 +686,7 @@ pub struct CairoInteractionClaim {
     pub builtins: BuiltinsInteractionClaim,
     pub pedersen_context: PedersenContextInteractionClaim,
     pub poseidon_context: PoseidonContextInteractionClaim,
+    pub sha256_context: Sha256ContextInteractionClaim,
     pub memory_address_to_id: memory_address_to_id::InteractionClaim,
     pub memory_id_to_value: memory_id_to_big::InteractionClaim,
     pub range_checks: RangeChecksInteractionClaim,
@@ -627,6 +694,8 @@ pub struct CairoInteractionClaim {
     pub verify_bitwise_xor_7: verify_bitwise_xor_7::InteractionClaim,
     pub verify_bitwise_xor_8: verify_bitwise_xor_8::InteractionClaim,
     pub verify_bitwise_xor_9: verify_bitwise_xor_9::InteractionClaim,
+    pub verify_bitwise_not_16: verify_bitwise_not_16::InteractionClaim,
+    pub verify_bitwise_and_8: verify_bitwise_and_8::InteractionClaim,
 }
 impl CairoInteractionClaim {
     pub fn mix_into(&self, channel: &mut impl Channel) {
@@ -636,6 +705,7 @@ impl CairoInteractionClaim {
         self.builtins.mix_into(channel);
         self.pedersen_context.mix_into(channel);
         self.poseidon_context.mix_into(channel);
+        self.sha256_context.mix_into(channel);
         self.memory_address_to_id.mix_into(channel);
         self.memory_id_to_value.mix_into(channel);
         self.range_checks.mix_into(channel);
@@ -643,6 +713,7 @@ impl CairoInteractionClaim {
         self.verify_bitwise_xor_7.mix_into(channel);
         self.verify_bitwise_xor_8.mix_into(channel);
         self.verify_bitwise_xor_9.mix_into(channel);
+        self.verify_bitwise_and_8.mix_into(channel);
     }
 }
 
@@ -662,6 +733,7 @@ pub fn lookup_sum(
     sum += interaction_claim.builtins.sum();
     sum += interaction_claim.pedersen_context.sum();
     sum += interaction_claim.poseidon_context.sum();
+    sum += interaction_claim.sha256_context.sum();
     sum += interaction_claim.memory_address_to_id.claimed_sum;
     sum += interaction_claim.memory_id_to_value.claimed_sum();
     sum += interaction_claim.range_checks.sum();
@@ -669,6 +741,7 @@ pub fn lookup_sum(
     sum += interaction_claim.verify_bitwise_xor_7.claimed_sum;
     sum += interaction_claim.verify_bitwise_xor_8.claimed_sum;
     sum += interaction_claim.verify_bitwise_xor_9.claimed_sum;
+    sum += interaction_claim.verify_bitwise_and_8.claimed_sum;
 
     sum
 }
@@ -680,6 +753,7 @@ pub struct CairoComponents {
     pub builtins: BuiltinComponents,
     pub pedersen_context: PedersenContextComponents,
     pub poseidon_context: PoseidonContextComponents,
+    pub sha256_context: Sha256ContextComponents,
     pub memory_address_to_id: memory_address_to_id::Component,
     pub memory_id_to_value: (
         Vec<memory_id_to_big::BigComponent>,
@@ -690,6 +764,8 @@ pub struct CairoComponents {
     pub verify_bitwise_xor_7: verify_bitwise_xor_7::Component,
     pub verify_bitwise_xor_8: verify_bitwise_xor_8::Component,
     pub verify_bitwise_xor_9: verify_bitwise_xor_9::Component,
+    pub verify_bitwise_not_16: verify_bitwise_not_16::Component,
+    pub verify_bitwise_and_8: verify_bitwise_and_8::Component,
     // ...
 }
 impl CairoComponents {
@@ -751,6 +827,12 @@ impl CairoComponents {
             &cairo_claim.poseidon_context,
             interaction_elements,
             &interaction_claim.poseidon_context,
+        );
+        let sha256_context = Sha256ContextComponents::new(
+            tree_span_provider,
+            &cairo_claim.sha256_context,
+            interaction_elements,
+            &interaction_claim.sha256_context,
         );
         let memory_address_to_id_component = memory_address_to_id::Component::new(
             tree_span_provider,
@@ -835,6 +917,26 @@ impl CairoComponents {
             },
             interaction_claim.verify_bitwise_xor_9.claimed_sum,
         );
+        let verify_bitwise_not_16_component = verify_bitwise_not_16::Component::new(
+            tree_span_provider,
+            verify_bitwise_not_16::Eval {
+                claim: cairo_claim.verify_bitwise_not_16,
+                verify_bitwise_not_16_lookup_elements: interaction_elements
+                    .verify_bitwise_not_16
+                    .clone(),
+            },
+            interaction_claim.verify_bitwise_not_16.claimed_sum,
+        );
+        let verify_bitwise_and_8_component = verify_bitwise_and_8::Component::new(
+            tree_span_provider,
+            verify_bitwise_and_8::Eval {
+                claim: cairo_claim.verify_bitwise_and_8,
+                verify_bitwise_and_8_lookup_elements: interaction_elements
+                    .verify_bitwise_and_8
+                    .clone(),
+            },
+            interaction_claim.verify_bitwise_and_8.claimed_sum,
+        );
         Self {
             opcodes: opcode_components,
             verify_instruction: verify_instruction_component,
@@ -842,6 +944,7 @@ impl CairoComponents {
             builtins: builtin_components,
             pedersen_context,
             poseidon_context,
+            sha256_context,
             memory_address_to_id: memory_address_to_id_component,
             memory_id_to_value: (
                 memory_id_to_value_components,
@@ -852,6 +955,8 @@ impl CairoComponents {
             verify_bitwise_xor_7: verify_bitwise_xor_7_component,
             verify_bitwise_xor_8: verify_bitwise_xor_8_component,
             verify_bitwise_xor_9: verify_bitwise_xor_9_component,
+            verify_bitwise_not_16: verify_bitwise_not_16_component,
+            verify_bitwise_and_8: verify_bitwise_and_8_component,
         }
     }
 
@@ -863,6 +968,7 @@ impl CairoComponents {
             self.builtins.provers(),
             self.pedersen_context.provers(),
             self.poseidon_context.provers(),
+            self.sha256_context.provers(),
             [&self.memory_address_to_id as &dyn ComponentProver<SimdBackend>,],
             self.memory_id_to_value
                 .0
@@ -875,7 +981,8 @@ impl CairoComponents {
                 &self.verify_bitwise_xor_7 as &dyn ComponentProver<SimdBackend>,
                 &self.verify_bitwise_xor_8 as &dyn ComponentProver<SimdBackend>,
                 &self.verify_bitwise_xor_9 as &dyn ComponentProver<SimdBackend>,
-            ]
+            ],
+            [&self.verify_bitwise_and_8 as &dyn ComponentProver<SimdBackend>]
         )
         .collect()
     }
@@ -901,6 +1008,7 @@ impl std::fmt::Display for CairoComponents {
         writeln!(f, "Builtins: {}", self.builtins)?;
         writeln!(f, "PedersenContext: {}", self.pedersen_context)?;
         writeln!(f, "PoseidonContext: {}", self.poseidon_context)?;
+        writeln!(f, "Sha256Context: {}", self.sha256_context)?;
         writeln!(
             f,
             "MemoryAddressToId: {}",
@@ -938,6 +1046,11 @@ impl std::fmt::Display for CairoComponents {
             f,
             "VerifyBitwiseXor9: {}",
             indented_component_display(&self.verify_bitwise_xor_9)
+        )?;
+        writeln!(
+            f,
+            "VerifyBitwiseAnd8: {}",
+            indented_component_display(&self.verify_bitwise_and_8)
         )?;
         Ok(())
     }

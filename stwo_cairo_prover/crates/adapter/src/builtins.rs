@@ -20,6 +20,7 @@ pub const PEDERSEN_MEMORY_CELLS: usize = 3;
 pub const POSEIDON_MEMORY_CELLS: usize = 6;
 pub const RANGE_CHECK_MEMORY_CELLS: usize = 1;
 pub const OUTPUT_MEMORY_CELLS: usize = 1;
+pub const SHA256_MEMORY_CELLS: usize = 24;
 
 // Minimal builtins instances per segment, chosen to fit SIMD requirements.
 pub const MIN_SEGMENT_SIZE: usize = N_LANES;
@@ -50,6 +51,7 @@ pub struct BuiltinSegments {
     pub mul_mod: Option<MemorySegmentAddresses>,
     pub pedersen: Option<MemorySegmentAddresses>,
     pub poseidon: Option<MemorySegmentAddresses>,
+    pub sha256: Option<MemorySegmentAddresses>,
     pub range_check_bits_96: Option<MemorySegmentAddresses>,
     pub range_check_bits_128: Option<MemorySegmentAddresses>,
 }
@@ -78,6 +80,7 @@ impl BuiltinSegments {
                     BuiltinName::pedersen => res.pedersen = segment,
                     BuiltinName::bitwise => res.bitwise = segment,
                     BuiltinName::poseidon => res.poseidon = segment,
+                    BuiltinName::sha256 => res.sha256 = segment,
                     BuiltinName::range_check96 => res.range_check_bits_96 = segment,
                     BuiltinName::add_mod => res.add_mod = segment,
                     BuiltinName::mul_mod => res.mul_mod = segment,
@@ -220,6 +223,7 @@ impl BuiltinSegments {
                 BuiltinName::mul_mod => MUL_MOD_MEMORY_CELLS,
                 BuiltinName::pedersen => PEDERSEN_MEMORY_CELLS,
                 BuiltinName::poseidon => POSEIDON_MEMORY_CELLS,
+                BuiltinName::sha256 => SHA256_MEMORY_CELLS,
                 BuiltinName::range_check96 => RANGE_CHECK_MEMORY_CELLS,
                 BuiltinName::range_check => RANGE_CHECK_MEMORY_CELLS,
                 _ => panic!("Invalid builtin name"),
