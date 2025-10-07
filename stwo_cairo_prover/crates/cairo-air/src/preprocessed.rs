@@ -18,11 +18,11 @@ use stwo_constraint_framework::preprocessed_columns::PreProcessedColumnId;
 use super::pedersen::const_columns::{PedersenPoints, PEDERSEN_TABLE_N_COLUMNS};
 use super::poseidon::const_columns::PoseidonRoundKeys;
 use crate::blake::const_columns::BlakeSigma;
+use crate::sha256::{Sha256K, Sha256SigmaTable, Sha256SigmaType};
 
 // Size to initialize the preprocessed trace with for `PreprocessedColumn::BitwiseXor`.
 const XOR_N_BITS: [u32; 5] = [4, 7, 8, 9, 10];
 const AND_N_BITS: [u32; 1] = [8];
-const NOT_N_BITS: [u32; 1] = [16];
 
 // Used by every builtin for a read of the memory.
 pub const MAX_SEQUENCE_LOG_SIZE: u32 = 25;
@@ -75,28 +75,40 @@ impl PreProcessedTrace {
             })
             .into_iter()
             .flatten();
-        let bitwise_not = NOT_N_BITS
-            .map(|n_bits| {
-                (0..2).map(move |col_index| {
-                    Box::new(BitwiseNot::new(n_bits, col_index)) as Box<dyn PreProcessedColumn>
-                })
-            })
-            .into_iter()
-            .flatten();
+
         let range_check = gen_range_check_columns();
         let poseidon_keys = (0..POSEIDON_N_WORDS)
             .map(|x| Box::new(PoseidonRoundKeys::new(x)) as Box<dyn PreProcessedColumn>);
         let blake_sigma = (0..N_BLAKE_SIGMA_COLS)
             .map(|x| Box::new(BlakeSigma::new(x)) as Box<dyn PreProcessedColumn>);
+        let sha256_k = (0..2).map(|x| Box::new(Sha256K::new(x)) as Box<dyn PreProcessedColumn>);
+        let sha256_sigma = [
+            Sha256SigmaType::SmallSigma0O0,
+            Sha256SigmaType::SmallSigma0O1,
+            Sha256SigmaType::SmallSigma1O0,
+            Sha256SigmaType::SmallSigma1O1,
+            Sha256SigmaType::BigSigma0O0,
+            Sha256SigmaType::BigSigma0O1,
+            Sha256SigmaType::BigSigma1O0,
+            Sha256SigmaType::BigSigma1O1,
+        ]
+        .map(|sigma_type| {
+            (0..6).map(move |x| {
+                Box::new(Sha256SigmaTable::new(sigma_type, x)) as Box<dyn PreProcessedColumn>
+            })
+        })
+        .into_iter()
+        .flatten();
 
         let columns = chain!(
             seq,
             bitwise_xor,
             bitwise_and,
-            bitwise_not,
             range_check,
             poseidon_keys,
-            blake_sigma
+            blake_sigma,
+            sha256_k,
+            sha256_sigma,
         )
         .sorted_by_key(|column| std::cmp::Reverse(column.log_size()))
         .collect();
@@ -320,57 +332,6 @@ impl PreProcessedColumn for BitwiseAnd {
     fn id(&self) -> PreProcessedColumnId {
         PreProcessedColumnId {
             id: format!("bitwise_and_{}_{}", self.n_bits, self.col_index),
-        }
-    }
-}
-/// A table of a,b, where a,b are integers and ~a = b.
-///
-/// # Attributes
-///
-/// - `n_bits`: The number of bits in each integer.
-/// - `col_index`: The column index in the preprocessed table.
-#[derive(Debug)]
-pub struct BitwiseNot {
-    n_bits: u32,
-    col_index: usize,
-}
-impl BitwiseNot {
-    pub const fn new(n_bits: u32, col_index: usize) -> Self {
-        assert!(col_index < 2, "col_index must be in range 0..=2");
-        Self { n_bits, col_index }
-    }
-
-    pub fn packed_at(&self, vec_row: usize) -> PackedM31 {
-        let lhs = || -> u32x16 {
-            (SIMD_ENUMERATION_0 + Simd::splat((vec_row * N_LANES) as u32)) >> self.n_bits
-        };
-        let simd = match self.col_index {
-            0 => lhs(),
-            1 => !lhs(),
-            _ => unreachable!(),
-        };
-        unsafe { PackedM31::from_simd_unchecked(simd) }
-    }
-}
-impl PreProcessedColumn for BitwiseNot {
-    fn log_size(&self) -> u32 {
-        self.n_bits
-    }
-
-    fn gen_column_simd(&self) -> CircleEvaluation<SimdBackend, BaseField, BitReversedOrder> {
-        CircleEvaluation::new(
-            CanonicCoset::new(self.log_size()).circle_domain(),
-            BaseColumn::from_simd(
-                (0..(1 << (self.log_size() - LOG_N_LANES)))
-                    .map(|i| self.packed_at(i))
-                    .collect(),
-            ),
-        )
-    }
-
-    fn id(&self) -> PreProcessedColumnId {
-        PreProcessedColumnId {
-            id: format!("bitwise_not_{}_{}", self.n_bits, self.col_index),
         }
     }
 }

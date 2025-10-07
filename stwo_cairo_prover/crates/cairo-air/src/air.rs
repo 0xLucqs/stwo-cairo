@@ -33,9 +33,8 @@ use super::range_checks_air::{
     RangeChecksInteractionElements,
 };
 use crate::components::{
-    memory_address_to_id, memory_id_to_big, verify_bitwise_and_8, verify_bitwise_not_16,
-    verify_bitwise_xor_4, verify_bitwise_xor_7, verify_bitwise_xor_8, verify_bitwise_xor_9,
-    verify_instruction,
+    memory_address_to_id, memory_id_to_big, verify_bitwise_and_8, verify_bitwise_xor_4,
+    verify_bitwise_xor_7, verify_bitwise_xor_8, verify_bitwise_xor_9, verify_instruction,
 };
 use crate::relations;
 use crate::sha256::air::{
@@ -121,7 +120,6 @@ pub struct CairoClaim {
     pub verify_bitwise_xor_7: verify_bitwise_xor_7::Claim,
     pub verify_bitwise_xor_8: verify_bitwise_xor_8::Claim,
     pub verify_bitwise_xor_9: verify_bitwise_xor_9::Claim,
-    pub verify_bitwise_not_16: verify_bitwise_not_16::Claim,
     pub verify_bitwise_and_8: verify_bitwise_and_8::Claim,
     // ...
 }
@@ -144,7 +142,6 @@ impl CairoClaim {
             verify_bitwise_xor_7,
             verify_bitwise_xor_8,
             verify_bitwise_xor_9,
-            verify_bitwise_not_16,
             verify_bitwise_and_8,
         } = self;
         public_data.mix_into(channel);
@@ -162,7 +159,6 @@ impl CairoClaim {
         verify_bitwise_xor_7.mix_into(channel);
         verify_bitwise_xor_8.mix_into(channel);
         verify_bitwise_xor_9.mix_into(channel);
-        verify_bitwise_not_16.mix_into(channel);
         verify_bitwise_and_8.mix_into(channel);
     }
 
@@ -184,7 +180,6 @@ impl CairoClaim {
             self.verify_bitwise_xor_7.log_sizes(),
             self.verify_bitwise_xor_8.log_sizes(),
             self.verify_bitwise_xor_9.log_sizes(),
-            self.verify_bitwise_not_16.log_sizes(),
             self.verify_bitwise_and_8.log_sizes(),
         ];
 
@@ -208,7 +203,6 @@ impl CairoClaim {
             verify_bitwise_xor_7: _,
             verify_bitwise_xor_8: _,
             verify_bitwise_xor_9: _,
-            verify_bitwise_not_16: _,
             verify_bitwise_and_8: _,
         } = self;
         // NOTE: The following components do not USE relations:
@@ -611,7 +605,6 @@ pub struct CairoInteractionElements {
     pub verify_bitwise_xor_8: relations::VerifyBitwiseXor_8,
     pub verify_bitwise_xor_9: relations::VerifyBitwiseXor_9,
     pub verify_bitwise_xor_12: relations::VerifyBitwiseXor_12,
-    pub verify_bitwise_not_16: relations::VerifyBitwiseNot_16,
     pub verify_bitwise_and_8: relations::VerifyBitwiseAnd_8,
     pub sigma: relations::Sigma,
     pub sha_256_schedule: relations::Sha256Schedule,
@@ -655,7 +648,6 @@ impl CairoInteractionElements {
             verify_bitwise_xor_8: relations::VerifyBitwiseXor_8::draw(channel),
             verify_bitwise_xor_9: relations::VerifyBitwiseXor_9::draw(channel),
             verify_bitwise_xor_12: relations::VerifyBitwiseXor_12::draw(channel),
-            verify_bitwise_not_16: relations::VerifyBitwiseNot_16::draw(channel),
             verify_bitwise_and_8: relations::VerifyBitwiseAnd_8::draw(channel),
             sigma: relations::Sigma::draw(channel),
             sha_256_schedule: relations::Sha256Schedule::draw(channel),
@@ -694,7 +686,6 @@ pub struct CairoInteractionClaim {
     pub verify_bitwise_xor_7: verify_bitwise_xor_7::InteractionClaim,
     pub verify_bitwise_xor_8: verify_bitwise_xor_8::InteractionClaim,
     pub verify_bitwise_xor_9: verify_bitwise_xor_9::InteractionClaim,
-    pub verify_bitwise_not_16: verify_bitwise_not_16::InteractionClaim,
     pub verify_bitwise_and_8: verify_bitwise_and_8::InteractionClaim,
 }
 impl CairoInteractionClaim {
@@ -764,7 +755,6 @@ pub struct CairoComponents {
     pub verify_bitwise_xor_7: verify_bitwise_xor_7::Component,
     pub verify_bitwise_xor_8: verify_bitwise_xor_8::Component,
     pub verify_bitwise_xor_9: verify_bitwise_xor_9::Component,
-    pub verify_bitwise_not_16: verify_bitwise_not_16::Component,
     pub verify_bitwise_and_8: verify_bitwise_and_8::Component,
     // ...
 }
@@ -917,16 +907,7 @@ impl CairoComponents {
             },
             interaction_claim.verify_bitwise_xor_9.claimed_sum,
         );
-        let verify_bitwise_not_16_component = verify_bitwise_not_16::Component::new(
-            tree_span_provider,
-            verify_bitwise_not_16::Eval {
-                claim: cairo_claim.verify_bitwise_not_16,
-                verify_bitwise_not_16_lookup_elements: interaction_elements
-                    .verify_bitwise_not_16
-                    .clone(),
-            },
-            interaction_claim.verify_bitwise_not_16.claimed_sum,
-        );
+
         let verify_bitwise_and_8_component = verify_bitwise_and_8::Component::new(
             tree_span_provider,
             verify_bitwise_and_8::Eval {
@@ -955,7 +936,6 @@ impl CairoComponents {
             verify_bitwise_xor_7: verify_bitwise_xor_7_component,
             verify_bitwise_xor_8: verify_bitwise_xor_8_component,
             verify_bitwise_xor_9: verify_bitwise_xor_9_component,
-            verify_bitwise_not_16: verify_bitwise_not_16_component,
             verify_bitwise_and_8: verify_bitwise_and_8_component,
         }
     }
