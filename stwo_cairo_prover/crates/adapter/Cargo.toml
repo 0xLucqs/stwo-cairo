@@ -31,9 +31,9 @@ dashmap = "6.1.0"
 rayon.workspace = true
 clap.workspace = true
 crypto-bigint = "0.5.1"
-cairo-lang-executable = { path = "/Users/lucas/cairo/crates/cairo-lang-executable" }
-cairo-lang-runner = { path = "/Users/lucas/cairo/crates/cairo-lang-runner" }
-cairo-lang-utils = { path = "/Users/lucas/cairo/crates/cairo-lang-utils" }
+cairo-lang-executable = { git = "https://github.com/0xLucqs/cairo.git", branch = "main" }
+cairo-lang-runner = { git = "https://github.com/0xLucqs/cairo.git", branch = "main" }
+cairo-lang-utils = { git = "https://github.com/0xLucqs/cairo.git", branch = "main" }
 
 [dev-dependencies]
 cairo-lang-casm.workspace = true
