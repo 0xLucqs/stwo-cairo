@@ -12,4 +12,5 @@ pub use crate::pedersen::const_columns::PedersenPoints;
 pub use crate::poseidon::const_columns::PoseidonRoundKeys;
 pub use crate::preprocessed::*;
 pub use crate::relations;
+pub use crate::sha256::*;
 pub use crate::verifier::RelationUse;

@@ -18,9 +18,11 @@ use stwo_constraint_framework::preprocessed_columns::PreProcessedColumnId;
 use super::pedersen::const_columns::{PedersenPoints, PEDERSEN_TABLE_N_COLUMNS};
 use super::poseidon::const_columns::PoseidonRoundKeys;
 use crate::blake::const_columns::BlakeSigma;
+use crate::sha256::{Sha256K, Sha256SigmaTable, Sha256SigmaType};
 
 // Size to initialize the preprocessed trace with for `PreprocessedColumn::BitwiseXor`.
 const XOR_N_BITS: [u32; 5] = [4, 7, 8, 9, 10];
+const AND_N_BITS: [u32; 1] = [8];
 
 // Used by every builtin for a read of the memory.
 pub const MAX_SEQUENCE_LOG_SIZE: u32 = 25;
@@ -45,10 +47,9 @@ impl PreProcessedTrace {
         let pedersen_points = (0..PEDERSEN_TABLE_N_COLUMNS)
             .map(|x| Box::new(PedersenPoints::new(x)) as Box<dyn PreProcessedColumn>);
 
-        let columns = chain!(canonical_without_pedersen, pedersen_points)
+        let columns: Vec<_> = chain!(canonical_without_pedersen, pedersen_points)
             .sorted_by_key(|column| std::cmp::Reverse(column.log_size()))
             .collect();
-
         Self { columns }
     }
 
@@ -65,15 +66,51 @@ impl PreProcessedTrace {
             })
             .into_iter()
             .flatten();
+        let bitwise_and = AND_N_BITS
+            .map(|n_bits| {
+                (0..3).map(move |col_index| {
+                    Box::new(BitwiseAnd::new(n_bits, col_index)) as Box<dyn PreProcessedColumn>
+                })
+            })
+            .into_iter()
+            .flatten();
+
         let range_check = gen_range_check_columns();
         let poseidon_keys = (0..POSEIDON_N_WORDS)
             .map(|x| Box::new(PoseidonRoundKeys::new(x)) as Box<dyn PreProcessedColumn>);
         let blake_sigma = (0..N_BLAKE_SIGMA_COLS)
             .map(|x| Box::new(BlakeSigma::new(x)) as Box<dyn PreProcessedColumn>);
+        let sha256_k = (0..2).map(|x| Box::new(Sha256K::new(x)) as Box<dyn PreProcessedColumn>);
+        let sha256_sigma = [
+            Sha256SigmaType::BigSigma0O0,
+            Sha256SigmaType::BigSigma0O1,
+            Sha256SigmaType::BigSigma1O0,
+            Sha256SigmaType::BigSigma1O1,
+            Sha256SigmaType::SmallSigma0O0,
+            Sha256SigmaType::SmallSigma0O1,
+            Sha256SigmaType::SmallSigma1O0,
+            Sha256SigmaType::SmallSigma1O1,
+        ]
+        .map(|sigma_type| {
+            (0..6).map(move |x| {
+                Box::new(Sha256SigmaTable::new(sigma_type, x)) as Box<dyn PreProcessedColumn>
+            })
+        })
+        .into_iter()
+        .flatten();
 
-        let columns = chain!(seq, bitwise_xor, range_check, poseidon_keys, blake_sigma)
-            .sorted_by_key(|column| std::cmp::Reverse(column.log_size()))
-            .collect();
+        let columns = chain!(
+            seq,
+            bitwise_xor,
+            bitwise_and,
+            range_check,
+            poseidon_keys,
+            blake_sigma,
+            sha256_sigma,
+            sha256_k,
+        )
+        .sorted_by_key(|column| std::cmp::Reverse(column.log_size()))
+        .collect();
 
         Self { columns }
     }
@@ -92,6 +129,8 @@ impl PreProcessedTrace {
 }
 
 fn gen_range_check_columns() -> Vec<Box<dyn PreProcessedColumn>> {
+    // RangeCheck_2.
+    let range_check_2_col_0 = RangeCheck::new([2], 0);
     // RangeCheck_4_3.
     let range_check_4_3_col_0 = RangeCheck::new([4, 3], 0);
     let range_check_4_3_col_1 = RangeCheck::new([4, 3], 1);
@@ -126,6 +165,7 @@ fn gen_range_check_columns() -> Vec<Box<dyn PreProcessedColumn>> {
     let range_check_3_3_3_3_3_col_4 = RangeCheck::new([3, 3, 3, 3, 3], 4);
 
     vec![
+        Box::new(range_check_2_col_0),
         Box::new(range_check_4_3_col_0),
         Box::new(range_check_4_3_col_1),
         Box::new(range_check_4_4_col_0),
@@ -241,6 +281,62 @@ impl PreProcessedColumn for BitwiseXor {
         }
     }
 }
+/// A table of a,b,c, where a,b,c are integers and a & b = c.
+///
+/// # Attributes
+///
+/// - `n_bits`: The number of bits in each integer.
+/// - `col_index`: The column index in the preprocessed table.
+#[derive(Debug)]
+pub struct BitwiseAnd {
+    n_bits: u32,
+    col_index: usize,
+}
+impl BitwiseAnd {
+    pub const fn new(n_bits: u32, col_index: usize) -> Self {
+        assert!(col_index < 3, "col_index must be in range 0..=2");
+        Self { n_bits, col_index }
+    }
+
+    pub fn packed_at(&self, vec_row: usize) -> PackedM31 {
+        let lhs = || -> u32x16 {
+            (SIMD_ENUMERATION_0 + Simd::splat((vec_row * N_LANES) as u32)) >> self.n_bits
+        };
+        let rhs = || -> u32x16 {
+            (SIMD_ENUMERATION_0 + Simd::splat((vec_row * N_LANES) as u32))
+                & Simd::splat((1 << self.n_bits) - 1)
+        };
+        let simd = match self.col_index {
+            0 => lhs(),
+            1 => rhs(),
+            2 => lhs() & rhs(),
+            _ => unreachable!(),
+        };
+        unsafe { PackedM31::from_simd_unchecked(simd) }
+    }
+}
+impl PreProcessedColumn for BitwiseAnd {
+    fn log_size(&self) -> u32 {
+        2 * self.n_bits
+    }
+
+    fn gen_column_simd(&self) -> CircleEvaluation<SimdBackend, BaseField, BitReversedOrder> {
+        CircleEvaluation::new(
+            CanonicCoset::new(self.log_size()).circle_domain(),
+            BaseColumn::from_simd(
+                (0..(1 << (self.log_size() - LOG_N_LANES)))
+                    .map(|i| self.packed_at(i))
+                    .collect(),
+            ),
+        )
+    }
+
+    fn id(&self) -> PreProcessedColumnId {
+        PreProcessedColumnId {
+            id: format!("bitwise_and_{}_{}", self.n_bits, self.col_index),
+        }
+    }
+}
 
 pub const SIMD_ENUMERATION_0: Simd<u32, N_LANES> =
     Simd::from_array([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
@@ -266,15 +362,15 @@ pub fn partition_into_bit_segments<const N: usize>(
 
 /// Generates the map from 0..2^(sum_bits) to the corresponding value's partition segments.
 pub fn generate_partitioned_enumeration<const N: usize>(
-    n_bits_per_segmants: [u32; N],
+    n_bits_per_segments: [u32; N],
 ) -> [Vec<PackedM31>; N] {
-    let sum_bits = n_bits_per_segmants.iter().sum::<u32>();
+    let sum_bits = std::cmp::max(n_bits_per_segments.iter().sum::<u32>(), LOG_N_LANES);
     assert!(sum_bits < MODULUS_BITS);
 
     let mut res = std::array::from_fn(|_| vec![]);
     for vec_row in 0..1 << (sum_bits - LOG_N_LANES) {
         let value = SIMD_ENUMERATION_0 + Simd::splat(vec_row * N_LANES as u32);
-        let segments = partition_into_bit_segments(value, n_bits_per_segmants);
+        let segments = partition_into_bit_segments(value, n_bits_per_segments);
         for i in 0..N {
             res[i].push(unsafe { PackedM31::from_simd_unchecked(segments[i]) });
         }
@@ -295,7 +391,7 @@ impl<const N: usize> RangeCheck<N> {
 }
 impl<const N: usize> PreProcessedColumn for RangeCheck<N> {
     fn log_size(&self) -> u32 {
-        self.ranges.iter().sum()
+        std::cmp::max(self.ranges.iter().sum(), LOG_N_LANES)
     }
 
     fn gen_column_simd(&self) -> CircleEvaluation<SimdBackend, BaseField, BitReversedOrder> {

@@ -5,6 +5,7 @@ pub use cairo_air::pedersen::const_columns::PedersenPoints;
 pub use cairo_air::poseidon::const_columns::PoseidonRoundKeys;
 pub use cairo_air::preprocessed::*;
 pub(crate) use cairo_air::relations;
+pub use cairo_air::sha256::const_columns::{Sha256K, Sha256SigmaTable, Sha256SigmaType};
 pub use num_traits::{One, Zero};
 pub use rayon::prelude::*;
 pub use stwo::core::fields::m31::M31;
@@ -31,5 +32,9 @@ pub use crate::witness::fast_deduction::pedersen::{PackedPartialEcMul, PackedPed
 pub use crate::witness::fast_deduction::poseidon::{
     PackedCube252, PackedPoseidon3PartialRoundsChain, PackedPoseidonFullRoundChain,
     PackedPoseidonRoundKeys,
+};
+pub use crate::witness::fast_deduction::sha256::{
+    PackedSha256BigSigma0, PackedSha256BigSigma1, PackedSha256KTable, PackedSha256Round,
+    PackedSha256Schedule, PackedSha256SmallSigma0, PackedSha256SmallSigma1,
 };
 pub use crate::witness::utils::*;

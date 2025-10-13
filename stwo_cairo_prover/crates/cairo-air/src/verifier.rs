@@ -8,7 +8,7 @@ use stwo::core::pcs::CommitmentSchemeVerifier;
 use stwo::core::verifier::{verify, VerificationError};
 use stwo_cairo_adapter::builtins::{
     ADD_MOD_MEMORY_CELLS, BITWISE_MEMORY_CELLS, MUL_MOD_MEMORY_CELLS, PEDERSEN_MEMORY_CELLS,
-    POSEIDON_MEMORY_CELLS, RANGE_CHECK_MEMORY_CELLS,
+    POSEIDON_MEMORY_CELLS, RANGE_CHECK_MEMORY_CELLS, SHA256_MEMORY_CELLS,
 };
 use stwo_cairo_adapter::memory::LARGE_MEMORY_VALUE_ID_BASE;
 use stwo_cairo_adapter::HashMap;
@@ -120,6 +120,7 @@ fn verify_builtins(builtins_claim: &BuiltinsClaim, segment_ranges: &PublicSegmen
         ec_op,
         keccak,
         poseidon,
+        sha256,
         range_check_96,
         add_mod,
         mul_mod,
@@ -194,6 +195,7 @@ fn verify_builtins(builtins_claim: &BuiltinsClaim, segment_ranges: &PublicSegmen
     check_builtin_generic!(mul_mod);
     check_builtin_generic!(pedersen);
     check_builtin_generic!(poseidon);
+    check_builtin_generic!(sha256);
 }
 
 fn verify_program(program: &MemorySection, public_segments: &PublicSegmentRanges) {
