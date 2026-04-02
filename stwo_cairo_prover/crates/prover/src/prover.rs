@@ -86,11 +86,15 @@ where
                 prover_params.pcs_config.fri_config.log_blowup_factor,
             )
     };
-    let twiddles = SimdBackend::precompute_twiddles(
+    let mut twiddles = SimdBackend::precompute_twiddles(
         CanonicCoset::new(max_domain_size)
             .circle_domain()
             .half_coset,
     );
+    // Low-memory optimization: convert twiddle Vecs to file-backed mmap storage.
+    // Twiddles are read-only after precomputation. File-backed pages can be evicted
+    // by the OS under memory pressure and re-faulted from disk.
+    let _twiddle_guard = stwo::prover::poly::twiddles::spill_twiddles_to_mmap(&mut twiddles);
 
     let preprocessed_trace = Arc::new(prover_params.preprocessed_trace.to_preprocessed_trace());
     let preprocessed_trace_polys =
@@ -106,14 +110,22 @@ where
         &base_column_pool,
     );
 
-    prove_cairo_with_precompute::<MC>(
+    let result = prove_cairo_with_precompute::<MC>(
         &base_column_pool,
         &twiddles,
         preprocessed_trace,
         MaybeOwned::Owned(preprocessed_tree),
         input,
         prover_params,
-    )
+    );
+
+    // Must unspill before twiddles are dropped to prevent Vec::drop on mmap memory.
+    if _twiddle_guard.is_some() {
+        stwo::prover::poly::twiddles::unspill_twiddles(&mut twiddles);
+    }
+    // _twiddle_guard drops here, munmapping the twiddle files.
+
+    result
 }
 
 pub fn prove_cairo_with_precompute<'a, MC: MerkleChannel>(
@@ -162,8 +174,19 @@ where
     let (claim, interaction_generator) = cairo_claim_generator.write_trace(&mut tree_builder);
     span.exit();
 
+    // Low-memory optimization: extract what we need from preprocessed_trace and drop the Arc
+    // before the interaction trace phase to free its memory.
+    let trace_cells = witness_trace_cells(&claim, &preprocessed_trace);
+    let preprocessed_ids = preprocessed_trace.ids();
+    drop(preprocessed_trace);
+
     claim.mix_into::<MC>(channel);
     tree_builder.commit(channel);
+
+    // Low-memory optimization: release base tree evaluations before building the interaction
+    // tree. In LowMemory mode, coefficients are retained (spilled to disk), so evaluations
+    // can be recomputed later for openings.
+    commitment_scheme.release_recomputable_evaluations();
 
     // Draw interaction elements.
     let interaction_pow = SimdBackend::grind(channel, INTERACTION_POW_BITS);
@@ -177,10 +200,7 @@ where
         interaction_generator.write_interaction_trace(&mut tree_builder, &interaction_elements);
     span.exit();
 
-    tracing::info!(
-        "Witness trace cells: {:?}",
-        witness_trace_cells(&claim, &preprocessed_trace)
-    );
+    tracing::info!("Witness trace cells: {:?}", trace_cells);
     // Validate lookup argument.
     debug_assert_eq!(
         lookup_sum(&claim, &interaction_elements, &interaction_claim),
@@ -195,7 +215,7 @@ where
         &claim,
         &interaction_elements,
         &interaction_claim,
-        &preprocessed_trace.ids(),
+        &preprocessed_ids,
     );
 
     // TODO(Ohad): move to a testing routine.
