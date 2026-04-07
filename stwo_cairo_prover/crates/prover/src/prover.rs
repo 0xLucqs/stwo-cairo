@@ -101,13 +101,21 @@ where
         SimdBackend::interpolate_columns(gen_trace(preprocessed_trace.clone()), &twiddles);
 
     let base_column_pool = BaseColumnPool::new();
-    let preprocessed_tree = CommitmentTreeProver::<SimdBackend, MC>::new(
+    let preprocessed_tree = CommitmentTreeProver::<SimdBackend, MC>::new_with_memory_mode(
         preprocessed_trace_polys,
         prover_params.pcs_config.fri_config.log_blowup_factor,
         &twiddles,
         prover_params.store_polynomials_coefficients,
         prover_params.pcs_config.lifting_log_size,
         &base_column_pool,
+        if matches!(
+            std::env::var("STWO_PROVER_MEMORY_MODE").as_deref(),
+            Ok("low_memory" | "low-memory" | "lowmemory" | "checkpointed")
+        ) {
+            stwo::prover::ProverMemoryMode::LowMemory
+        } else {
+            stwo::prover::ProverMemoryMode::Fast
+        },
     );
 
     let result = prove_cairo_with_precompute::<MC>(
@@ -184,9 +192,11 @@ where
     tree_builder.commit(channel);
 
     // Low-memory optimization: release base tree evaluations before building the interaction
-    // tree. In LowMemory mode, coefficients are retained (spilled to disk), so evaluations
-    // can be recomputed later for openings.
-    commitment_scheme.release_recomputable_evaluations();
+    // tree. This is only safe in LowMemory mode, where coefficients are retained and
+    // evaluations can be materialized later on demand.
+    if commitment_scheme.memory_mode == stwo::prover::ProverMemoryMode::LowMemory {
+        commitment_scheme.release_recomputable_evaluations();
+    }
 
     // Draw interaction elements.
     let interaction_pow = SimdBackend::grind(channel, INTERACTION_POW_BITS);
@@ -372,6 +382,8 @@ pub fn create_and_serialize_proof(
 
 #[cfg(test)]
 pub mod tests {
+    #[cfg(feature = "slow-tests")]
+    use std::sync::Mutex;
     use std::sync::Arc;
 
     use stwo_cairo_common::preprocessed_columns::preprocessed_trace::{
@@ -381,6 +393,49 @@ pub mod tests {
     use stwo_cairo_dev_utils::vm_utils::{run_and_adapt, ProgramType};
 
     use crate::debug_tools::assert_constraints::assert_cairo_constraints;
+
+    #[cfg(feature = "slow-tests")]
+    static MEMORY_MODE_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    #[cfg(feature = "slow-tests")]
+    fn serialized_ret_opcode_proof_for_memory_mode(memory_mode: &str) -> String {
+        let _env_lock = MEMORY_MODE_ENV_LOCK.lock().unwrap();
+        let previous = std::env::var_os("STWO_PROVER_MEMORY_MODE");
+        unsafe { std::env::set_var("STWO_PROVER_MEMORY_MODE", memory_mode) };
+
+        let proof_json = {
+            let compiled_program = get_compiled_cairo_program_path("test_prove_verify_ret_opcode");
+            let input = run_and_adapt(&compiled_program, ProgramType::Json, None).unwrap();
+            let prover_params = crate::prover::ProverParameters {
+                channel_hash: crate::prover::ChannelHash::Blake2s,
+                pcs_config: stwo::core::pcs::PcsConfig::default(),
+                preprocessed_trace: crate::prover::PreProcessedTraceVariant::Canonical,
+                channel_salt: 0,
+                store_polynomials_coefficients: false,
+                include_all_preprocessed_columns: false,
+            };
+            let cairo_proof =
+                crate::prover::prove_cairo::<
+                    stwo::core::vcs_lifted::blake2_merkle::Blake2sMerkleChannel,
+                >(input, prover_params)
+                .unwrap();
+            let mut serialized: Vec<starknet_ff::FieldElement> = Vec::new();
+            stwo_cairo_serialize::CairoSerialize::serialize(&cairo_proof, &mut serialized);
+            let proof_hex: Vec<String> = serialized
+                .into_iter()
+                .map(|felt| format!("0x{felt:x}"))
+                .collect();
+            sonic_rs::to_string_pretty(&proof_hex).unwrap()
+        };
+
+        if let Some(previous) = previous {
+            unsafe { std::env::set_var("STWO_PROVER_MEMORY_MODE", previous) };
+        } else {
+            unsafe { std::env::remove_var("STWO_PROVER_MEMORY_MODE") };
+        }
+
+        proof_json
+    }
 
     #[test]
     fn test_all_cairo_constraints() {
@@ -398,6 +453,18 @@ pub mod tests {
         let input = run_and_adapt(&compiled_program, ProgramType::Json, None).unwrap();
         let pp_tree = Arc::new(PreProcessedTrace::canonical_small());
         assert_cairo_constraints(input, pp_tree);
+    }
+
+    #[cfg(feature = "slow-tests")]
+    #[test]
+    fn test_low_memory_proof_matches_fast_path_ret_opcode() {
+        let fast_proof = serialized_ret_opcode_proof_for_memory_mode("fast");
+        let low_memory_proof = serialized_ret_opcode_proof_for_memory_mode("low_memory");
+
+        assert_eq!(
+            fast_proof, low_memory_proof,
+            "serialized ret_opcode proof differs between fast and low-memory modes"
+        );
     }
 
     #[cfg(test)]
