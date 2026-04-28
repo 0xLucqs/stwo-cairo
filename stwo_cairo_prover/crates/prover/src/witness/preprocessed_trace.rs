@@ -10,7 +10,7 @@ use stwo::prover::backend::BackendForChannel;
 use stwo::prover::mempool::BaseColumnPool;
 use stwo::prover::poly::circle::{CircleEvaluation, PolyOps};
 use stwo::prover::poly::BitReversedOrder;
-use stwo::prover::CommitmentTreeProver;
+use stwo::prover::{CommitmentTreeProver, ProverMemoryMode};
 use stwo_cairo_common::preprocessed_columns::preprocessed_trace::PreProcessedTrace;
 
 /// Generates the root of the preprocessed trace commitment tree for a given `log_blowup_factor`.
@@ -42,13 +42,14 @@ where
 
     // Generate the commitment tree.
     let polys = SimdBackend::interpolate_columns(gen_trace(preprocessed_trace), &twiddles);
-    let commitment_scheme = CommitmentTreeProver::<SimdBackend, MC>::new(
+    let commitment_scheme = CommitmentTreeProver::<SimdBackend, MC>::new_with_memory_mode(
         polys,
         log_blowup_factor,
         &twiddles,
         false,
         lifting_log_size,
         &BaseColumnPool::new(),
+        ProverMemoryMode::Fast,
     );
 
     commitment_scheme.commitment.root()

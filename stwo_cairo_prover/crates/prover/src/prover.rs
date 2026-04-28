@@ -10,7 +10,7 @@ use cairo_air::utils::{serialize_proof_to_file, ProofFormat};
 use cairo_air::verifier::{verify_cairo_ex, INTERACTION_POW_BITS};
 use cairo_air::{CairoProof, PreProcessedTraceVariant};
 use num_traits::Zero;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use stwo::core::channel::{Channel, MerkleChannel};
 use stwo::core::fields::qm31::SecureField;
 use stwo::core::fri::FriConfig;
@@ -25,7 +25,9 @@ use stwo::prover::backend::BackendForChannel;
 use stwo::prover::mempool::BaseColumnPool;
 use stwo::prover::poly::circle::PolyOps;
 use stwo::prover::poly::twiddles::TwiddleTree;
-use stwo::prover::{prove_ex, CommitmentSchemeProver, CommitmentTreeProver, ProvingError};
+use stwo::prover::{
+    prove_ex, CommitmentSchemeProver, CommitmentTreeProver, ProverMemoryMode, ProvingError,
+};
 use stwo_cairo_adapter::ProverInput;
 use stwo_cairo_common::preprocessed_columns::preprocessed_trace::PreProcessedTrace;
 use stwo_cairo_serialize::CairoSerialize;
@@ -44,6 +46,44 @@ mod json {
 }
 
 pub(crate) const LOG_MAX_ROWS: u32 = 27;
+
+const fn default_prover_memory_mode() -> ProverMemoryMode {
+    ProverMemoryMode::Fast
+}
+
+mod prover_memory_mode_serde {
+    use super::*;
+
+    pub fn serialize<S>(mode: &ProverMemoryMode, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mode = match mode {
+            ProverMemoryMode::Fast => "fast",
+            ProverMemoryMode::SmoothedPeak => "smoothed_peak",
+            ProverMemoryMode::LowMemory => "low_memory",
+            ProverMemoryMode::UltraLow => "ultra_low",
+        };
+        serializer.serialize_str(mode)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<ProverMemoryMode, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        match value.as_str() {
+            "fast" => Ok(ProverMemoryMode::Fast),
+            "smoothed_peak" => Ok(ProverMemoryMode::SmoothedPeak),
+            "low_memory" => Ok(ProverMemoryMode::LowMemory),
+            "ultra_low" => Ok(ProverMemoryMode::UltraLow),
+            _ => Err(serde::de::Error::unknown_variant(
+                &value,
+                &["fast", "smoothed_peak", "low_memory", "ultra_low"],
+            )),
+        }
+    }
+}
 
 fn prove_verify_serialize<MC: MerkleChannel>(
     input: ProverInput,
@@ -108,14 +148,7 @@ where
         prover_params.store_polynomials_coefficients,
         prover_params.pcs_config.lifting_log_size,
         &base_column_pool,
-        if matches!(
-            std::env::var("STWO_PROVER_MEMORY_MODE").as_deref(),
-            Ok("low_memory" | "low-memory" | "lowmemory" | "checkpointed")
-        ) {
-            stwo::prover::ProverMemoryMode::LowMemory
-        } else {
-            stwo::prover::ProverMemoryMode::Fast
-        },
+        prover_params.memory_mode,
     );
 
     let result = prove_cairo_with_precompute::<MC>(
@@ -155,6 +188,7 @@ where
         preprocessed_trace: preprocessed_trace_variant,
         store_polynomials_coefficients,
         include_all_preprocessed_columns,
+        memory_mode,
     } = prover_params;
 
     // Setup protocol.
@@ -168,6 +202,7 @@ where
         twiddles,
         base_column_pool,
     );
+    commitment_scheme.set_memory_mode(memory_mode);
     if store_polynomials_coefficients {
         commitment_scheme.set_store_polynomials_coefficients();
     }
@@ -192,9 +227,9 @@ where
     tree_builder.commit(channel);
 
     // Low-memory optimization: release base tree evaluations before building the interaction
-    // tree. This is only safe in LowMemory mode, where coefficients are retained and
-    // evaluations can be materialized later on demand.
-    if commitment_scheme.memory_mode == stwo::prover::ProverMemoryMode::LowMemory {
+    // tree. Safe whenever the mode rematerializes evaluations on demand (LowMemory or
+    // UltraLow), since coefficients are retained and evaluations can be rebuilt later.
+    if commitment_scheme.memory_mode.rematerializes_evaluations() {
         commitment_scheme.release_recomputable_evaluations();
     }
 
@@ -285,6 +320,12 @@ pub struct ProverParameters {
     /// Whether to include samples for every preprocessed column in the proof. Default is `false`.
     /// If `false`, the proof only includes samples for columns used by at least one component.
     pub include_all_preprocessed_columns: bool,
+    /// Prover memory policy. Default is `fast`.
+    #[serde(
+        default = "default_prover_memory_mode",
+        with = "prover_memory_mode_serde"
+    )]
+    pub memory_mode: ProverMemoryMode,
 }
 
 /// The hash function used for commitments, for the prover-verifier channel,
@@ -338,6 +379,7 @@ pub fn create_and_serialize_proof(
             preprocessed_trace: PreProcessedTraceVariant::Canonical,
             store_polynomials_coefficients: false,
             include_all_preprocessed_columns: false,
+            memory_mode: ProverMemoryMode::Fast,
         }
     };
 
@@ -382,10 +424,9 @@ pub fn create_and_serialize_proof(
 
 #[cfg(test)]
 pub mod tests {
-    #[cfg(feature = "slow-tests")]
-    use std::sync::Mutex;
     use std::sync::Arc;
 
+    use stwo::prover::ProverMemoryMode;
     use stwo_cairo_common::preprocessed_columns::preprocessed_trace::{
         testing_preprocessed_tree, PreProcessedTrace,
     };
@@ -395,46 +436,29 @@ pub mod tests {
     use crate::debug_tools::assert_constraints::assert_cairo_constraints;
 
     #[cfg(feature = "slow-tests")]
-    static MEMORY_MODE_ENV_LOCK: Mutex<()> = Mutex::new(());
-
-    #[cfg(feature = "slow-tests")]
-    fn serialized_ret_opcode_proof_for_memory_mode(memory_mode: &str) -> String {
-        let _env_lock = MEMORY_MODE_ENV_LOCK.lock().unwrap();
-        let previous = std::env::var_os("STWO_PROVER_MEMORY_MODE");
-        unsafe { std::env::set_var("STWO_PROVER_MEMORY_MODE", memory_mode) };
-
-        let proof_json = {
-            let compiled_program = get_compiled_cairo_program_path("test_prove_verify_ret_opcode");
-            let input = run_and_adapt(&compiled_program, ProgramType::Json, None).unwrap();
-            let prover_params = crate::prover::ProverParameters {
-                channel_hash: crate::prover::ChannelHash::Blake2s,
-                pcs_config: stwo::core::pcs::PcsConfig::default(),
-                preprocessed_trace: crate::prover::PreProcessedTraceVariant::Canonical,
-                channel_salt: 0,
-                store_polynomials_coefficients: false,
-                include_all_preprocessed_columns: false,
-            };
-            let cairo_proof =
-                crate::prover::prove_cairo::<
-                    stwo::core::vcs_lifted::blake2_merkle::Blake2sMerkleChannel,
-                >(input, prover_params)
-                .unwrap();
-            let mut serialized: Vec<starknet_ff::FieldElement> = Vec::new();
-            stwo_cairo_serialize::CairoSerialize::serialize(&cairo_proof, &mut serialized);
-            let proof_hex: Vec<String> = serialized
-                .into_iter()
-                .map(|felt| format!("0x{felt:x}"))
-                .collect();
-            sonic_rs::to_string_pretty(&proof_hex).unwrap()
+    fn serialized_ret_opcode_proof_for_memory_mode(memory_mode: ProverMemoryMode) -> String {
+        let compiled_program = get_compiled_cairo_program_path("test_prove_verify_ret_opcode");
+        let input = run_and_adapt(&compiled_program, ProgramType::Json, None).unwrap();
+        let prover_params = crate::prover::ProverParameters {
+            channel_hash: crate::prover::ChannelHash::Blake2s,
+            pcs_config: stwo::core::pcs::PcsConfig::default(),
+            preprocessed_trace: crate::prover::PreProcessedTraceVariant::Canonical,
+            channel_salt: 0,
+            store_polynomials_coefficients: false,
+            include_all_preprocessed_columns: false,
+            memory_mode,
         };
-
-        if let Some(previous) = previous {
-            unsafe { std::env::set_var("STWO_PROVER_MEMORY_MODE", previous) };
-        } else {
-            unsafe { std::env::remove_var("STWO_PROVER_MEMORY_MODE") };
-        }
-
-        proof_json
+        let cairo_proof = crate::prover::prove_cairo::<
+            stwo::core::vcs_lifted::blake2_merkle::Blake2sMerkleChannel,
+        >(input, prover_params)
+        .unwrap();
+        let mut serialized: Vec<starknet_ff::FieldElement> = Vec::new();
+        stwo_cairo_serialize::CairoSerialize::serialize(&cairo_proof, &mut serialized);
+        let proof_hex: Vec<String> = serialized
+            .into_iter()
+            .map(|felt| format!("0x{felt:x}"))
+            .collect();
+        sonic_rs::to_string_pretty(&proof_hex).unwrap()
     }
 
     #[test]
@@ -455,11 +479,57 @@ pub mod tests {
         assert_cairo_constraints(input, pp_tree);
     }
 
+    #[test]
+    fn test_memory_mode_serde_default_is_fast() {
+        #[derive(serde::Deserialize)]
+        struct MemoryModeOnly {
+            #[serde(
+                default = "crate::prover::default_prover_memory_mode",
+                with = "crate::prover::prover_memory_mode_serde"
+            )]
+            memory_mode: ProverMemoryMode,
+        }
+
+        let config: MemoryModeOnly = sonic_rs::from_str("{}").unwrap();
+        assert_eq!(config.memory_mode, ProverMemoryMode::Fast);
+    }
+
+    #[test]
+    fn test_memory_mode_serde_accepts_low_memory() {
+        #[derive(serde::Deserialize)]
+        struct MemoryModeOnly {
+            #[serde(
+                default = "crate::prover::default_prover_memory_mode",
+                with = "crate::prover::prover_memory_mode_serde"
+            )]
+            memory_mode: ProverMemoryMode,
+        }
+
+        let config: MemoryModeOnly = sonic_rs::from_str(r#"{"memory_mode":"low_memory"}"#).unwrap();
+        assert_eq!(config.memory_mode, ProverMemoryMode::LowMemory);
+    }
+
+    #[test]
+    fn test_memory_mode_serde_accepts_ultra_low() {
+        #[derive(serde::Deserialize)]
+        struct MemoryModeOnly {
+            #[serde(
+                default = "crate::prover::default_prover_memory_mode",
+                with = "crate::prover::prover_memory_mode_serde"
+            )]
+            memory_mode: ProverMemoryMode,
+        }
+
+        let config: MemoryModeOnly = sonic_rs::from_str(r#"{"memory_mode":"ultra_low"}"#).unwrap();
+        assert_eq!(config.memory_mode, ProverMemoryMode::UltraLow);
+    }
+
     #[cfg(feature = "slow-tests")]
     #[test]
     fn test_low_memory_proof_matches_fast_path_ret_opcode() {
-        let fast_proof = serialized_ret_opcode_proof_for_memory_mode("fast");
-        let low_memory_proof = serialized_ret_opcode_proof_for_memory_mode("low_memory");
+        let fast_proof = serialized_ret_opcode_proof_for_memory_mode(ProverMemoryMode::Fast);
+        let low_memory_proof =
+            serialized_ret_opcode_proof_for_memory_mode(ProverMemoryMode::LowMemory);
 
         assert_eq!(
             fast_proof, low_memory_proof,
@@ -501,6 +571,7 @@ pub mod tests {
                 channel_salt: 42,
                 store_polynomials_coefficients: false,
                 include_all_preprocessed_columns: false,
+                memory_mode: ProverMemoryMode::Fast,
             };
             let cairo_proof =
                 prove_cairo::<Poseidon252MerkleChannel>(input, prover_params).unwrap();
@@ -604,6 +675,7 @@ pub mod tests {
                 channel_salt: 0,
                 store_polynomials_coefficients: true,
                 include_all_preprocessed_columns: false,
+                memory_mode: ProverMemoryMode::Fast,
             };
             let cairo_proof = prove_cairo::<Blake2sMerkleChannel>(input, prover_params).unwrap();
             verify_cairo::<Blake2sMerkleChannel>(cairo_proof.into()).unwrap();
@@ -625,6 +697,7 @@ pub mod tests {
                 channel_salt: 0,
                 store_polynomials_coefficients: false,
                 include_all_preprocessed_columns: false,
+                memory_mode: ProverMemoryMode::Fast,
             };
             let cairo_proof = prove_cairo::<Blake2sMerkleChannel>(input, prover_params).unwrap();
             let mut proof_file = NamedTempFile::new().unwrap();
@@ -688,6 +761,7 @@ pub mod tests {
                 channel_salt: 0,
                 store_polynomials_coefficients: false,
                 include_all_preprocessed_columns: false,
+                memory_mode: ProverMemoryMode::Fast,
             };
             let cairo_proof = prove_cairo::<Blake2sMerkleChannel>(input, prover_params).unwrap();
             let mut proof_file = NamedTempFile::new().unwrap();
@@ -728,6 +802,7 @@ pub mod tests {
                 channel_salt: 0,
                 store_polynomials_coefficients: false,
                 include_all_preprocessed_columns: false,
+                memory_mode: ProverMemoryMode::Fast,
             };
             let proofs = (0..n_proofs_to_compare)
                 .map(|_| {
@@ -790,6 +865,7 @@ pub mod tests {
                     channel_salt: 0,
                     store_polynomials_coefficients: false,
                     include_all_preprocessed_columns: false,
+                    memory_mode: ProverMemoryMode::Fast,
                 };
                 let cairo_proof =
                     prove_cairo::<Blake2sMerkleChannel>(input, prover_params).unwrap();
@@ -809,6 +885,7 @@ pub mod tests {
                     channel_salt: 0,
                     store_polynomials_coefficients: false,
                     include_all_preprocessed_columns: false,
+                    memory_mode: ProverMemoryMode::Fast,
                 };
                 let cairo_proof =
                     prove_cairo::<Blake2sMerkleChannel>(input, prover_params).unwrap();
@@ -893,6 +970,7 @@ pub mod tests {
                     channel_salt: 0,
                     store_polynomials_coefficients: false,
                     include_all_preprocessed_columns: false,
+                    memory_mode: ProverMemoryMode::Fast,
                 };
 
                 // Run poseidon builtin with 15 different instances.
@@ -951,6 +1029,7 @@ pub mod tests {
                     channel_salt: 0,
                     store_polynomials_coefficients: false,
                     include_all_preprocessed_columns: false,
+                    memory_mode: ProverMemoryMode::Fast,
                 };
 
                 // Run pedersen builtin with 15 different instances.

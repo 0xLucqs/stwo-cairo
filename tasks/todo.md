@@ -1,3 +1,40 @@
+# Memory Mode Env Wiring Removal
+
+## Plan
+
+- [x] Remove production reads of `STWO_PROVER_MEMORY_MODE` from `stwo-cairo`.
+- [x] Make memory mode an explicit prover parameter with the existing fast path as the default.
+- [x] Update low-memory proof-equivalence coverage to use explicit parameters instead of mutating process env.
+- [x] Run formatting and focused prover tests.
+- [x] Record verification results here.
+
+## Review
+
+- Removed the direct `STWO_PROVER_MEMORY_MODE` read from
+  `stwo_cairo_prover/crates/prover/src/prover.rs`.
+- Added explicit `ProverParameters::memory_mode`, defaulting to `ProverMemoryMode::Fast` for
+  omitted JSON fields and supporting the current STWO tiers `fast`, `smoothed_peak`,
+  `low_memory`, and `ultra_low`.
+- Routed direct `prove_cairo()` preprocessed-tree construction and the main commitment scheme
+  through the explicit memory mode.
+- Updated the low-memory proof-equivalence test to pass `ProverMemoryMode::{Fast, LowMemory}`
+  directly instead of mutating process-global env state.
+- Made preprocessed-root generation explicitly use fast mode instead of relying on STWO defaults.
+- Updated STWO workspace dependency revs to
+  `16cd2f926a40f5592d00ffddc993f3a7f9e31216`, matching the clean local `~/stwo` HEAD with
+  env-var memory-mode wiring removed.
+- Verification commands:
+  - `rtk proxy rustup run nightly-2025-06-20 cargo fmt --manifest-path stwo_cairo_prover/Cargo.toml --all`
+  - `rtk proxy rustup run nightly-2025-06-20 cargo check --manifest-path stwo_cairo_prover/Cargo.toml -p stwo-cairo-prover`
+  - `rtk proxy rustup run nightly-2025-06-20 cargo test --manifest-path stwo_cairo_prover/Cargo.toml -p stwo-cairo-prover test_memory_mode_serde -- --nocapture`
+  - `rtk proxy rustup run nightly-2025-06-20 cargo test --manifest-path stwo_cairo_prover/Cargo.toml -p stwo-cairo-prover --features slow-tests prover::tests::test_low_memory_proof_matches_fast_path_ret_opcode -- --exact --nocapture`
+- Verification results:
+  - `cargo fmt` passed.
+  - `cargo check` passed after fetching `stwo@16cd2f92`.
+  - `test_memory_mode_serde_default_is_fast`, `test_memory_mode_serde_accepts_low_memory`, and
+    `test_memory_mode_serde_accepts_ultra_low` passed.
+  - `prover::tests::test_low_memory_proof_matches_fast_path_ret_opcode` passed in `1072.74s`.
+
 # Mobile RAM Optimization
 
 ## Plan
